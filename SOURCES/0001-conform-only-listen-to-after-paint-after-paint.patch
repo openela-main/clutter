@@ -1,0 +1,130 @@
+From 1b8c6d5f4895edf64aad804e2461d896e4c5c08d Mon Sep 17 00:00:00 2001
+From: Ray Strode <rstrode@redhat.com>
+Date: Tue, 18 Dec 2018 14:42:11 -0500
+Subject: [PATCH] conform: only listen to after-paint after paint
+
+The after-paint signal is emitted after painting, obviously,
+but also, maybe less obviously, also emitted after picking.
+
+The actor-shader-effect test does read-pixels, so needs to
+know when painting has actually happened, not just picking.
+
+This commit changes that test to only look for the after-paint
+signal after the paint signal.
+
+In the picking case, after-paint would follow a pick signal
+instead.
+
+Fixes Xvfb installed-tests testing.
+---
+ tests/conform/actor-shader-effect.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/tests/conform/actor-shader-effect.c b/tests/conform/actor-shader-effect.c
+index d3ddd384f..8114aab8a 100644
+--- a/tests/conform/actor-shader-effect.c
++++ b/tests/conform/actor-shader-effect.c
+@@ -197,88 +197,97 @@ static ClutterActor *
+ make_actor (GType shader_type)
+ {
+   ClutterActor *rect;
+   const ClutterColor white = { 0xff, 0xff, 0xff, 0xff };
+ 
+   rect = clutter_rectangle_new ();
+   clutter_rectangle_set_color (CLUTTER_RECTANGLE (rect), &white);
+   clutter_actor_set_size (rect, 50, 50);
+ 
+   clutter_actor_add_effect (rect, g_object_new (shader_type, NULL));
+ 
+   return rect;
+ }
+ 
+ static guint32
+ get_pixel (int x, int y)
+ {
+   guint8 data[4];
+ 
+   cogl_read_pixels (x, y, 1, 1,
+                     COGL_READ_PIXELS_COLOR_BUFFER,
+                     COGL_PIXEL_FORMAT_RGBA_8888_PRE,
+                     data);
+ 
+   return (((guint32) data[0] << 16) |
+           ((guint32) data[1] << 8) |
+           data[2]);
+ }
+ 
+ static void
+-paint_cb (ClutterStage *stage,
+-          gpointer      data)
++after_paint_cb (ClutterStage *stage,
++                gpointer      data)
+ {
+   gboolean *was_painted = data;
+ 
+   /* old shader effect */
+   g_assert_cmpint (get_pixel (50, 50), ==, 0xff0000);
+   /* new shader effect */
+   g_assert_cmpint (get_pixel (150, 50), ==, 0x00ffff);
+   /* another new shader effect */
+   g_assert_cmpint (get_pixel (250, 50), ==, 0xff00ff);
+   /* new shader effect */
+   g_assert_cmpint (get_pixel (350, 50), ==, 0x00ffff);
+ 
+   *was_painted = TRUE;
+ }
+ 
++static void
++paint_cb (ClutterStage *stage,
++          gpointer      data)
++{
++  g_signal_connect (stage, "after-paint",
++                    G_CALLBACK (after_paint_cb),
++                    data);
++}
++
+ static void
+ actor_shader_effect (void)
+ {
+   ClutterActor *stage;
+   ClutterActor *rect;
+   gboolean was_painted;
+ 
+   if (!clutter_feature_available (CLUTTER_FEATURE_SHADERS_GLSL))
+     return;
+ 
+   stage = clutter_stage_new ();
+ 
+   rect = make_actor (foo_old_shader_effect_get_type ());
+   clutter_container_add_actor (CLUTTER_CONTAINER (stage), rect);
+ 
+   rect = make_actor (foo_new_shader_effect_get_type ());
+   clutter_actor_set_x (rect, 100);
+   clutter_container_add_actor (CLUTTER_CONTAINER (stage), rect);
+ 
+   rect = make_actor (foo_another_new_shader_effect_get_type ());
+   clutter_actor_set_x (rect, 200);
+   clutter_container_add_actor (CLUTTER_CONTAINER (stage), rect);
+ 
+   rect = make_actor (foo_new_shader_effect_get_type ());
+   clutter_actor_set_x (rect, 300);
+   clutter_container_add_actor (CLUTTER_CONTAINER (stage), rect);
+ 
+   clutter_actor_show (stage);
+ 
+   was_painted = FALSE;
+-  g_signal_connect (stage, "after-paint",
++  g_signal_connect (stage, "paint",
+                     G_CALLBACK (paint_cb),
+                     &was_painted);
+ 
+   while (!was_painted)
+     g_main_context_iteration (NULL, FALSE);
+ }
+ 
+ CLUTTER_TEST_SUITE (
+   CLUTTER_TEST_UNIT ("/actor/shader-effect", actor_shader_effect)
+ )
+-- 
+2.20.1
+
